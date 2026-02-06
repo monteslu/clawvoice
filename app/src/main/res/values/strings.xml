@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Clawvoice</string>
+    <string name="setup_title">Connect to Gateway</string>
+    <string name="gateway_url_hint">Gateway URL (e.g., wss://your-gateway.example.com)</string>
+    <string name="gateway_token_hint">Gateway Token (optional for first-time pairing)</string>
+    <string name="connect_button">Connect</string>
+    <string name="waiting_for_pairing">Waiting for pairing approval...</string>
+    <string name="pairing_instructions">Run this command on your server:\nclawdbot devices approve</string>
+    <string name="connected">Connected</string>
+    <string name="disconnected">Disconnected</string>
+    <string name="send_hint">Type a message...</string>
+    <string name="voice_button_description">Voice input</string>
+    <string name="send_button_description">Send message</string>
+    <string name="listening">Listening...</string>
+    <string name="speaking">Speaking...</string>
+    <string name="notification_channel_name">Clawvoice Connection</string>
+    <string name="notification_channel_description">Shows when Clawvoice is connected to the gateway</string>
+    <string name="ntfy_channel_name">Clawvoice Notifications</string>
+    <string name="ntfy_channel_description">Push notifications from Clawvoice</string>
+</resources>

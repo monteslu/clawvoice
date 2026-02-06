@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="120"
+    android:viewportHeight="120">
+
+    <!-- Lobster Claw Body -->
+    <path
+        android:fillColor="#FFEE5A5A"
+        android:pathData="M60,18 C35,18 22,38 22,55 C22,72 35,88 47,92 L47,98 L55,98 L55,92 C55,92 60,94 65,92 L65,98 L73,98 L73,92 C85,88 98,72 98,55 C98,38 85,18 60,18Z" />
+
+    <!-- Left Claw -->
+    <path
+        android:fillColor="#FFEE5A5A"
+        android:pathData="M27,50 C14,46 10,54 14,62 C18,70 27,66 31,58 C34,52 31,50 27,50Z" />
+
+    <!-- Right Claw -->
+    <path
+        android:fillColor="#FFEE5A5A"
+        android:pathData="M93,50 C106,46 110,54 106,62 C102,70 93,66 89,58 C86,52 89,50 93,50Z" />
+
+    <!-- Antenna Left -->
+    <path
+        android:strokeColor="#FFFF6B6B"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M50,22 Q42,14 38,16" />
+
+    <!-- Antenna Right -->
+    <path
+        android:strokeColor="#FFFF6B6B"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M70,22 Q78,14 82,16" />
+
+    <!-- Eyes Background -->
+    <path
+        android:fillColor="#FF0A0E14"
+        android:pathData="M48,40 A5,5 0 1,1 48,39.99 Z" />
+    <path
+        android:fillColor="#FF0A0E14"
+        android:pathData="M72,40 A5,5 0 1,1 72,39.99 Z" />
+
+    <!-- Eye Glow -->
+    <path
+        android:fillColor="#FF00D9FF"
+        android:pathData="M49,39 A2,2 0 1,1 49,38.99 Z" />
+    <path
+        android:fillColor="#FF00D9FF"
+        android:pathData="M73,39 A2,2 0 1,1 73,38.99 Z" />
+
+    <!-- Microphone Body (centered in mouth area) -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M60,52 L60,52 C56.5,52 54,54.5 54,58 L54,68 C54,71.5 56.5,74 60,74 C63.5,74 66,71.5 66,68 L66,58 C66,54.5 63.5,52 60,52 Z" />
+
+    <!-- Microphone Grille Lines -->
+    <path
+        android:strokeColor="#FFEE5A5A"
+        android:strokeWidth="1"
+        android:pathData="M56,56 L64,56" />
+    <path
+        android:strokeColor="#FFEE5A5A"
+        android:strokeWidth="1"
+        android:pathData="M56,59 L64,59" />
+    <path
+        android:strokeColor="#FFEE5A5A"
+        android:strokeWidth="1"
+        android:pathData="M56,62 L64,62" />
+    <path
+        android:strokeColor="#FFEE5A5A"
+        android:strokeWidth="1"
+        android:pathData="M56,65 L64,65" />
+
+    <!-- Microphone Stand Arc -->
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2.5"
+        android:fillColor="#00000000"
+        android:strokeLineCap="round"
+        android:pathData="M51,70 Q51,80 60,80 Q69,80 69,70" />
+
+    <!-- Microphone Stand Stem -->
+    <path
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M60,80 L60,86" />
+
+    <!-- Microphone Base -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M54,85 L66,85 L64,88 L56,88 Z" />
+
+</vector>

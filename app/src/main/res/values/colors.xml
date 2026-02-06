@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Coral/Lobster Red Theme -->
+    <color name="coral_bright">#FFFF6B6B</color>
+    <color name="coral_primary">#FFEE5A5A</color>
+    <color name="coral_dark">#FFCC4444</color>
+    <color name="coral_deeper">#FFAA3333</color>
+
+    <!-- Accent colors -->
+    <color name="cyan_bright">#FF00D9FF</color>
+    <color name="cyan_dark">#FF00A0CC</color>
+
+    <!-- Theme colors -->
+    <color name="primary">@color/coral_primary</color>
+    <color name="primary_dark">@color/coral_dark</color>
+    <color name="primary_variant">@color/coral_deeper</color>
+    <color name="secondary">@color/cyan_bright</color>
+    <color name="secondary_variant">@color/cyan_dark</color>
+
+    <!-- Basic colors -->
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+
+    <!-- Chat bubbles -->
+    <color name="bubble_user">@color/coral_primary</color>
+    <color name="bubble_assistant">#FF2A2A2A</color>
+
+    <!-- Text -->
+    <color name="text_primary">#FFFFFFFF</color>
+    <color name="text_secondary">#B3FFFFFF</color>
+
+    <!-- Background -->
+    <color name="background">#FF0D1117</color>
+    <color name="surface">#FF161B22</color>
+    <color name="bg_deep">#FF0A0E14</color>
+</resources>

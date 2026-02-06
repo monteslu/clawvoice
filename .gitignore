@@ -1,0 +1,39 @@
+# Gradle
+.gradle/
+gradle-8.2/
+gradle-8.7/
+build/
+
+# Local properties (SDK path, etc.)
+local.properties
+
+# IDE
+.idea/
+*.iml
+
+# Android build
+app/build/
+app/release/
+*.apk
+*.aab
+
+# Signing
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+
+# Secrets
+*.env
+credentials.json
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Sherpa-ONNX downloaded models
+app/src/main/assets/piper/
