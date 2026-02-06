@@ -1,19 +1,19 @@
-# ClawVoice Communication Protocol - Android Guide
+# ClawVoice Communication Protocol - Android Implementation
 
-> How the Android app connects to OpenClaw.
+> How the Android app connects to OpenClaw via WebSocket.
 
-See also: [OpenClaw Channel Setup](channel.md)
+See also: [OpenClaw Integration](channel.md)
 
 ---
 
 ## Overview
 
-ClawVoice uses a simple HTTP/REST protocol to communicate with OpenClaw:
+ClawVoice connects to the OpenClaw Gateway WebSocket and uses the standard protocol:
 
-- **Text only** — saves bandwidth, works on slow connections
-- **STT/TTS on device** — voice processing stays local
-- **Device pairing** — one-time approval for security
-- **Same auth as other channels** — uses device tokens
+- **WebSocket** — Real-time bidirectional communication
+- **Protocol v3** — Same as iOS/macOS/CLI clients
+- **Text only over wire** — STT/TTS happens locally on device
+- **Device pairing** — Cryptographic identity + approval flow
 
 ## Architecture
 
@@ -24,41 +24,31 @@ ClawVoice uses a simple HTTP/REST protocol to communicate with OpenClaw:
 │  ┌────────────────────────────────────────────────────────┐ │
 │  │                   ClawVoice App                         │ │
 │  │                                                         │ │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐ │ │
-│  │  │   Voice     │  │   Voice     │  │   VoiceManager  │ │ │
-│  │  │   Input     │──│   STT       │──│   (Kotlin)      │ │ │
-│  │  │   (Mic)     │  │  (Android)  │  │                 │ │ │
-│  │  └─────────────┘  └─────────────┘  └────────┬────────┘ │ │
-│  │                                              │          │ │
-│  │                                     Text     │          │ │
-│  │                                              ▼          │ │
-│  │                                    ┌─────────────────┐  │ │
-│  │                                    │  OpenClawClient │  │ │
-│  │                                    │  POST /api/voice│  │ │
-│  │                                    └────────┬────────┘  │ │
-│  │                                              │          │ │
-│  │                                     Text     │          │ │
-│  │                                              ▼          │ │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐ │ │
-│  │  │   Speaker   │◀─│   TTS       │◀─│  ResponseHandler│ │ │
-│  │  │   Output    │  │  (Android)  │  │                 │ │ │
-│  │  └─────────────┘  └─────────────┘  └─────────────────┘ │ │
+│  │  ┌─────────────┐                    ┌───────────────┐  │ │
+│  │  │   Voice     │    [text]          │ ClawdClient   │  │ │
+│  │  │   Input     │──────────────────▶│               │  │ │
+│  │  │   (Mic)     │                    │  WebSocket    │  │ │
+│  │  │      +      │                    │  chat.send    │──┼─┼──▶ Gateway
+│  │  │   STT       │                    │  chat.history │  │ │
+│  │  └─────────────┘                    │  ping         │◀─┼─┼── (events)
+│  │                                     └───────┬───────┘  │ │
+│  │                                             │ [text]   │ │
+│  │  ┌─────────────┐                    ┌───────▼───────┐  │ │
+│  │  │   Speaker   │◀───────────────────│ MessageFilter │  │ │
+│  │  │   Output    │    [filtered]      │               │  │ │
+│  │  │      +      │                    │ Strips:       │  │ │
+│  │  │   TTS       │                    │ HEARTBEAT_OK  │  │ │
+│  │  └─────────────┘                    │ NO_REPLY      │  │ │
+│  │                                     │ MEDIA:...     │  │ │
+│  │                                     │ [[reply_to:]] │  │ │
+│  │                                     └───────────────┘  │ │
 │  └────────────────────────────────────────────────────────┘ │
-│                              │                               │
-└──────────────────────────────┼───────────────────────────────┘
-                               │
-                    HTTPS (text only)
-                               │
-                               ▼
-                    ┌─────────────────────┐
-                    │   OpenClaw Gateway  │
-                    │   /api/voice/*      │
-                    └─────────────────────┘
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ## Connection Flow
 
-### 1. First Launch - Device Pairing
+### First Launch - Device Pairing
 
 ```
 ┌──────────────┐                              ┌──────────────┐
@@ -66,445 +56,270 @@ ClawVoice uses a simple HTTP/REST protocol to communicate with OpenClaw:
 │   Android    │                              │   Gateway    │
 └──────┬───────┘                              └──────┬───────┘
        │                                             │
-       │  POST /api/voice/pair                       │
-       │  { deviceId, publicKey, deviceName }        │
+       │  WebSocket Connect                          │
        │ ───────────────────────────────────────────▶│
        │                                             │
-       │  { status: "pending", requestId: "abc123" } │
+       │  event: connect.challenge                   │
+       │  { nonce, ts }                              │
        │ ◀───────────────────────────────────────────│
        │                                             │
-       │         [App shows: "Waiting for approval"] │
-       │         [User runs: openclaw devices        │
-       │                     approve abc123]         │
-       │                                             │
-       │  GET /api/voice/pair/abc123 (polling)       │
+       │  req: connect                               │
+       │  { device: { id, publicKey, signature },   │
+       │    auth: { token: "" }, ... }               │
        │ ───────────────────────────────────────────▶│
        │                                             │
-       │  { status: "approved", deviceToken: "..." } │
+       │  res: { ok: false, error: pairing_required }│
+       │ ◀───────────────────────────────────────────│
+       │                                             │
+       │  [App shows: "Waiting for approval"]        │
+       │  [User runs: openclaw nodes approve <id>]   │
+       │                                             │
+       │  event: device.paired                       │
+       │  { deviceToken: "..." }                     │
        │ ◀───────────────────────────────────────────│
        │                                             │
        │  [App saves deviceToken securely]           │
+       │  [ConnectionState → Ready]                  │
        │                                             │
 ```
 
-### 2. Normal Operation
+### Reconnect - With Token
 
 ```
 ┌──────────────┐                              ┌──────────────┐
 │  ClawVoice   │                              │   OpenClaw   │
 └──────┬───────┘                              └──────┬───────┘
        │                                             │
-       │  [User speaks: "What time is it?"]          │
-       │  [STT converts to text locally]             │
-       │                                             │
-       │  POST /api/voice/message                    │
-       │  Authorization: Bearer <deviceToken>        │
-       │  { text: "What time is it?" }               │
+       │  WebSocket Connect                          │
        │ ───────────────────────────────────────────▶│
        │                                             │
-       │                    [Agent processes message]│
-       │                                             │
-       │  { reply: "It's 3:45 PM." }                 │
+       │  event: connect.challenge { nonce, ts }     │
        │ ◀───────────────────────────────────────────│
        │                                             │
-       │  [TTS speaks response locally]              │
+       │  req: connect                               │
+       │  { device: { signature of nonce },          │
+       │    auth: { token: "<saved-token>" } }       │
+       │ ───────────────────────────────────────────▶│
+       │                                             │
+       │  res: { ok: true, payload: { ... } }        │
+       │ ◀───────────────────────────────────────────│
+       │                                             │
+       │  [ConnectionState → Ready]                  │
+       │  [Fetch history: chat.history]              │
        │                                             │
 ```
 
-## API Reference
-
-### Base URL
+### Chat Flow
 
 ```
-https://<your-gateway-url>
+┌──────────────┐                              ┌──────────────┐
+│  ClawVoice   │                              │   OpenClaw   │
+└──────┬───────┘                              └──────┬───────┘
+       │                                             │
+       │  [User speaks: "What's the weather?"]       │
+       │  [STT → text locally]                       │
+       │                                             │
+       │  req: chat.send                             │
+       │  { sessionKey: "main",                      │
+       │    message: "What's the weather?" }         │
+       │ ───────────────────────────────────────────▶│
+       │                                             │
+       │  res: { ok: true }                          │
+       │ ◀───────────────────────────────────────────│
+       │                                             │
+       │  event: chat { state: "delta", text: "It" } │
+       │ ◀───────────────────────────────────────────│
+       │  event: chat { state: "delta", text: "It's"}│
+       │ ◀───────────────────────────────────────────│
+       │  ...                                        │
+       │  event: chat { state: "final",              │
+       │                text: "It's 72°F and sunny" }│
+       │ ◀───────────────────────────────────────────│
+       │                                             │
+       │  [Filter → TTS speaks response]             │
+       │                                             │
 ```
 
-Example: `https://pip-claw.shiv.to`
+## Key Classes
 
-### Authentication
+### ClawdClient
 
-After pairing, include the device token in all requests:
-
-```http
-Authorization: Bearer <device-token>
-```
-
-### Endpoints
-
-#### Request Pairing
-
-```http
-POST /api/voice/pair
-Content-Type: application/json
-
-{
-  "deviceId": "sha256-of-device-public-key",
-  "publicKey": "base64-encoded-public-key",
-  "deviceName": "Luis's Pixel 8"
-}
-```
-
-**Response (pending):**
-```json
-{
-  "status": "pending",
-  "requestId": "abc123def",
-  "message": "Waiting for approval"
-}
-```
-
-**Response (already approved):**
-```json
-{
-  "status": "approved",
-  "deviceToken": "64-char-hex-token"
-}
-```
-
-#### Check Pairing Status
-
-```http
-GET /api/voice/pair/{requestId}
-```
-
-**Response:**
-```json
-{
-  "status": "pending" | "approved" | "rejected",
-  "deviceToken": "..." // only if approved
-}
-```
-
-#### Send Message
-
-```http
-POST /api/voice/message
-Authorization: Bearer <device-token>
-Content-Type: application/json
-
-{
-  "text": "What's on my calendar today?",
-  "sessionKey": "agent:main:clawvoice"  // optional
-}
-```
-
-**Response:**
-```json
-{
-  "reply": "You have a meeting at 2 PM with the design team.",
-  "sessionKey": "agent:main:clawvoice"
-}
-```
-
-#### Check Status
-
-```http
-GET /api/voice/status
-Authorization: Bearer <device-token>
-```
-
-**Response:**
-```json
-{
-  "status": "connected",
-  "device": {
-    "id": "abc123...",
-    "name": "Luis's Pixel 8"
-  }
-}
-```
-
-## Android Implementation
-
-### Dependencies
+Main WebSocket client. Handles:
+- Connection lifecycle
+- Challenge/response authentication
+- Request/response correlation
+- Event dispatching
+- Auto-reconnect with exponential backoff
 
 ```kotlin
-// build.gradle.kts
-dependencies {
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0")
-    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+class ClawdClient(context: Context, gatewayUrl: String) {
+    // State
+    val connectionState: StateFlow<ConnectionState>
+    val messages: StateFlow<List<ChatMessage>>
+    val events: SharedFlow<GatewayEvent>
+    
+    // Actions
+    fun connect(initialToken: String? = null)
+    fun disconnect()
+    suspend fun sendMessage(text: String, sessionKey: String = "main"): Boolean
+    suspend fun fetchHistory(sessionKey: String = "main", limit: Int = 50)
 }
 ```
 
-### OpenClawClient
+### DeviceIdentity
+
+Cryptographic device identity for pairing:
 
 ```kotlin
-class OpenClawClient(
-    private val baseUrl: String,
-    private val context: Context
-) {
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(60, TimeUnit.SECONDS)  // Agent may take time
-        .build()
+class DeviceIdentity {
+    val deviceId: String        // SHA-256 of public key
+    val publicKeyBase64: String // Ed25519 public key
     
-    private val json = Json { ignoreUnknownKeys = true }
+    fun signChallenge(nonce: String, signedAtMs: Long, token: String): SignedChallenge
+}
+```
+
+### MessageFilter
+
+Strips protocol markers before display/TTS:
+
+```kotlin
+object MessageFilter {
+    fun processAssistantMessage(rawContent: String): ProcessedMessage
     
-    // Get stored device token
-    private fun getDeviceToken(): String? {
-        return SecureStorage.getDeviceToken(context)
+    data class ProcessedMessage(
+        val text: String,           // Cleaned text for display/TTS
+        val mediaPath: String?,     // Extracted MEDIA: path (if any)
+        val shouldDisplay: Boolean  // False for HEARTBEAT_OK, NO_REPLY
+    )
+}
+```
+
+**Filtered patterns:**
+- `HEARTBEAT_OK` — Heartbeat acknowledgment (entire message)
+- `NO_REPLY` — Silent response marker (entire message)
+- `MEDIA:...` — Server TTS audio path (extracted, line removed)
+- `[[reply_to_current]]` — Reply tag (stripped)
+- `[[reply_to:...]]` — Reply tag with ID (stripped)
+
+### ConnectionState
+
+```kotlin
+sealed class ConnectionState {
+    object Disconnected : ConnectionState()
+    object Connecting : ConnectionState()
+    object Connected : ConnectionState()      // WebSocket open, not yet authenticated
+    object WaitingForPairing : ConnectionState()
+    object Ready : ConnectionState()          // Authenticated, can chat
+    data class Error(val message: String) : ConnectionState()
+}
+```
+
+## Protocol Details
+
+### Connect Request
+
+```kotlin
+val connectParams = buildJsonObject {
+    put("minProtocol", 3)
+    put("maxProtocol", 3)
+    putJsonObject("client") {
+        put("id", "clawdbot-android")
+        put("version", BuildConfig.VERSION_NAME)
+        put("platform", "android")
+        put("mode", "webchat")  // Uses webchat session routing
     }
-    
-    // Request pairing
-    suspend fun requestPairing(
-        deviceId: String,
-        publicKey: String,
-        deviceName: String
-    ): PairingResponse = withContext(Dispatchers.IO) {
-        val body = buildJsonObject {
-            put("deviceId", deviceId)
-            put("publicKey", publicKey)
-            put("deviceName", deviceName)
-        }.toString()
-        
-        val request = Request.Builder()
-            .url("$baseUrl/api/voice/pair")
-            .post(body.toRequestBody("application/json".toMediaType()))
-            .build()
-        
-        val response = client.newCall(request).execute()
-        json.decodeFromString(response.body!!.string())
+    put("role", "operator")
+    putJsonArray("scopes") {
+        add("operator.read")
+        add("operator.write")
     }
-    
-    // Check pairing status
-    suspend fun checkPairing(requestId: String): PairingResponse = withContext(Dispatchers.IO) {
-        val request = Request.Builder()
-            .url("$baseUrl/api/voice/pair/$requestId")
-            .get()
-            .build()
-        
-        val response = client.newCall(request).execute()
-        json.decodeFromString(response.body!!.string())
+    putJsonObject("auth") {
+        put("token", deviceToken ?: "")
     }
+    putJsonObject("device") {
+        put("id", deviceIdentity.deviceId)
+        put("publicKey", deviceIdentity.publicKeyBase64)
+        put("signature", signed.signature)
+        put("signedAt", signed.signedAt)
+        put("nonce", signed.nonce)
+    }
+}
+```
+
+### Chat Event Handling
+
+```kotlin
+private fun handleChatEvent(payload: JsonObject) {
+    val state = payload["state"]?.jsonPrimitive?.content  // "delta" or "final"
+    val runId = payload["runId"]?.jsonPrimitive?.content
     
-    // Send message to agent
-    suspend fun sendMessage(text: String): MessageResponse = withContext(Dispatchers.IO) {
-        val token = getDeviceToken() 
-            ?: throw IllegalStateException("Not paired")
-        
-        val body = buildJsonObject {
-            put("text", text)
-        }.toString()
-        
-        val request = Request.Builder()
-            .url("$baseUrl/api/voice/message")
-            .header("Authorization", "Bearer $token")
-            .post(body.toRequestBody("application/json".toMediaType()))
-            .build()
-        
-        val response = client.newCall(request).execute()
-        
-        if (!response.isSuccessful) {
-            throw IOException("Request failed: ${response.code}")
+    // Extract text from message.content array
+    val textContent = payload["message"]?.jsonObject
+        ?.get("content")?.jsonArray
+        ?.filter { it["type"] == "text" }
+        ?.firstOrNull()
+        ?.get("text")?.jsonPrimitive?.content
+    
+    when (state) {
+        "delta" -> {
+            // Update streaming message (text is cumulative)
+            currentStreamingContent = StringBuilder(textContent)
+            updateMessageList()
         }
-        
-        json.decodeFromString(response.body!!.string())
-    }
-}
-
-@Serializable
-data class PairingResponse(
-    val status: String,
-    val requestId: String? = null,
-    val deviceToken: String? = null,
-    val message: String? = null
-)
-
-@Serializable
-data class MessageResponse(
-    val reply: String,
-    val sessionKey: String? = null
-)
-```
-
-### Device Identity
-
-```kotlin
-class DeviceIdentity(context: Context) {
-    private val keyPair: KeyPair
-    
-    init {
-        keyPair = loadOrGenerateKeyPair(context)
-    }
-    
-    val deviceId: String
-        get() = sha256Hex(keyPair.public.encoded)
-    
-    val publicKeyBase64: String
-        get() = Base64.encodeToString(keyPair.public.encoded, Base64.NO_WRAP)
-    
-    private fun loadOrGenerateKeyPair(context: Context): KeyPair {
-        // Check secure storage first
-        SecureStorage.getKeyPair(context)?.let { return it }
-        
-        // Generate new Ed25519 keypair
-        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
-        SecureStorage.saveKeyPair(context, keyPair)
-        return keyPair
-    }
-    
-    private fun sha256Hex(bytes: ByteArray): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        return digest.digest(bytes).joinToString("") { "%02x".format(it) }
-    }
-}
-```
-
-### VoiceManager
-
-```kotlin
-class VoiceManager(
-    private val context: Context,
-    private val client: OpenClawClient
-) {
-    private val speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context)
-    private val tts = TextToSpeech(context) { status ->
-        if (status == TextToSpeech.SUCCESS) {
-            tts.language = Locale.getDefault()
-        }
-    }
-    
-    private val _state = MutableStateFlow<VoiceState>(VoiceState.Idle)
-    val state: StateFlow<VoiceState> = _state.asStateFlow()
-    
-    fun startListening() {
-        _state.value = VoiceState.Listening
-        
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, 
-                     RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
-        }
-        
-        speechRecognizer.setRecognitionListener(object : RecognitionListener {
-            override fun onResults(results: Bundle) {
-                val matches = results.getStringArrayList(
-                    SpeechRecognizer.RESULTS_RECOGNITION
-                )
-                matches?.firstOrNull()?.let { text ->
-                    processUserInput(text)
-                }
-            }
-            
-            override fun onError(error: Int) {
-                _state.value = VoiceState.Error("Speech recognition failed")
-            }
-            
-            // ... other callbacks
-        })
-        
-        speechRecognizer.startListening(intent)
-    }
-    
-    private fun processUserInput(text: String) {
-        _state.value = VoiceState.Processing(text)
-        
-        CoroutineScope(Dispatchers.Main).launch {
-            try {
-                val response = client.sendMessage(text)
-                speak(response.reply)
-            } catch (e: Exception) {
-                _state.value = VoiceState.Error(e.message ?: "Failed")
+        "final" -> {
+            // Response complete - trigger TTS
+            val processed = MessageFilter.processAssistantMessage(textContent)
+            if (processed.shouldDisplay) {
+                emitTextComplete(processed.text)
             }
         }
     }
-    
-    private fun speak(text: String) {
-        _state.value = VoiceState.Speaking(text)
-        
-        tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onDone(utteranceId: String) {
-                _state.value = VoiceState.Idle
-            }
-            override fun onError(utteranceId: String) {
-                _state.value = VoiceState.Idle
-            }
-            override fun onStart(utteranceId: String) {}
-        })
-        
-        tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "response")
-    }
-    
-    fun stop() {
-        speechRecognizer.cancel()
-        tts.stop()
-        _state.value = VoiceState.Idle
-    }
 }
+```
 
-sealed class VoiceState {
-    object Idle : VoiceState()
-    object Listening : VoiceState()
-    data class Processing(val text: String) : VoiceState()
-    data class Speaking(val text: String) : VoiceState()
-    data class Error(val message: String) : VoiceState()
+## Configuration
+
+```kotlin
+object ClawdConfig {
+    const val PROTOCOL_VERSION = 3
+    const val CONNECT_TIMEOUT_MS = 30_000L
+    const val REQUEST_TIMEOUT_MS = 60_000L
+    const val PING_INTERVAL_MS = 30_000L
+    const val RECONNECT_BASE_DELAY_MS = 1_000L
+    const val RECONNECT_MAX_DELAY_MS = 30_000L
 }
 ```
 
 ## Error Handling
 
-| HTTP Code | Meaning | Action |
-|-----------|---------|--------|
-| 401 | Invalid/expired token | Re-pair device |
-| 400 | Bad request | Check request format |
-| 500 | Server error | Retry with backoff |
-| Timeout | Network issue | Show offline state |
+| Scenario | Behavior |
+|----------|----------|
+| WebSocket failure | Auto-reconnect with backoff (max 10 attempts) |
+| `pairing_required` | Show pairing UI, wait for `device.paired` event |
+| Invalid token | Clear token, reconnect (triggers new pairing) |
+| Request timeout | Fail the request, connection stays open |
+| Ping failure | Log warning, connection may be stale |
 
-```kotlin
-suspend fun sendMessageSafe(text: String): Result<String> {
-    return try {
-        val response = client.sendMessage(text)
-        Result.success(response.reply)
-    } catch (e: IOException) {
-        Result.failure(e)
-    }
-}
-```
+## Security
 
-## Offline Handling
+1. **Device token** — Stored in EncryptedSharedPreferences (Android Keystore)
+2. **Challenge signing** — Ed25519 signature proves device identity
+3. **TLS required** — Always use `wss://` in production
+4. **No secrets in logs** — Tokens and message content not logged
 
-Since we're not using WebSocket, the app can work in "fire and forget" mode:
+## Bandwidth
 
-1. **Queue messages** when offline
-2. **Retry on reconnect**
-3. **Show pending indicator**
+Only text crosses the network:
+- User speech → STT (local) → text → WebSocket
+- WebSocket → text → TTS (local) → audio
 
-```kotlin
-class MessageQueue(context: Context) {
-    private val queue = mutableListOf<String>()
-    
-    fun enqueue(text: String) {
-        queue.add(text)
-        trySend()
-    }
-    
-    private fun trySend() {
-        if (!isOnline()) return
-        
-        while (queue.isNotEmpty()) {
-            val text = queue.first()
-            try {
-                client.sendMessage(text)
-                queue.removeFirst()
-            } catch (e: Exception) {
-                break  // Will retry later
-            }
-        }
-    }
-}
-```
-
-## Security Notes
-
-1. **Device token** — Store in Android Keystore via EncryptedSharedPreferences
-2. **Gateway URL** — Store securely, allow user to change
-3. **TLS required** — Always use HTTPS
-4. **No sensitive data in logs** — Don't log tokens or messages
+Typical message: ~100-500 bytes
+Typical response: ~200-2000 bytes
 
 ---
 
 ## Related
 
-- [OpenClaw Channel Setup](channel.md) — Server-side hook configuration
-- [Android App Architecture](../clawd-android-app.md) — Full app design doc
+- [OpenClaw Integration](channel.md) — Gateway setup
+- [Gateway Protocol](/docs/gateway/protocol.md) — Full protocol spec
