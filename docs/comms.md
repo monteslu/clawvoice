@@ -8,238 +8,135 @@ See also: [OpenClaw Integration](channel.md)
 
 ## Overview
 
-ClawVoice connects to the OpenClaw Gateway WebSocket and uses the standard protocol:
+ClawVoice connects to the OpenClaw Gateway WebSocket using protocol v3:
 
 - **WebSocket** — Real-time bidirectional communication
-- **Protocol v3** — Same as iOS/macOS/CLI clients
 - **Text only over wire** — STT/TTS happens locally on device
 - **Device pairing** — Cryptographic identity + approval flow
 
-## Architecture
+---
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Android Device                            │
-│                                                              │
-│  ┌────────────────────────────────────────────────────────┐ │
-│  │                   ClawVoice App                         │ │
-│  │                                                         │ │
-│  │  ┌─────────────┐                    ┌───────────────┐  │ │
-│  │  │   Voice     │    [text]          │ ClawdClient   │  │ │
-│  │  │   Input     │──────────────────▶│               │  │ │
-│  │  │   (Mic)     │                    │  WebSocket    │  │ │
-│  │  │      +      │                    │  chat.send    │──┼─┼──▶ Gateway
-│  │  │   STT       │                    │  chat.history │  │ │
-│  │  └─────────────┘                    │  ping         │◀─┼─┼── (events)
-│  │                                     └───────┬───────┘  │ │
-│  │                                             │ [text]   │ │
-│  │  ┌─────────────┐                    ┌───────▼───────┐  │ │
-│  │  │   Speaker   │◀───────────────────│ MessageFilter │  │ │
-│  │  │   Output    │    [filtered]      │               │  │ │
-│  │  │      +      │                    │ Strips:       │  │ │
-│  │  │   TTS       │                    │ HEARTBEAT_OK  │  │ │
-│  │  └─────────────┘                    │ NO_REPLY      │  │ │
-│  │                                     │ MEDIA:...     │  │ │
-│  │                                     │ [[reply_to:]] │  │ │
-│  │                                     └───────────────┘  │ │
-│  └────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────┘
-```
+## Client Configuration
 
-## Connection Flow
-
-### First Launch - Device Pairing
-
-```
-┌──────────────┐                              ┌──────────────┐
-│  ClawVoice   │                              │   OpenClaw   │
-│   Android    │                              │   Gateway    │
-└──────┬───────┘                              └──────┬───────┘
-       │                                             │
-       │  WebSocket Connect                          │
-       │ ───────────────────────────────────────────▶│
-       │                                             │
-       │  event: connect.challenge                   │
-       │  { nonce, ts }                              │
-       │ ◀───────────────────────────────────────────│
-       │                                             │
-       │  req: connect                               │
-       │  { device: { id, publicKey, signature },   │
-       │    auth: { token: "" }, ... }               │
-       │ ───────────────────────────────────────────▶│
-       │                                             │
-       │  res: { ok: false, error: pairing_required }│
-       │ ◀───────────────────────────────────────────│
-       │                                             │
-       │  [App shows: "Waiting for approval"]        │
-       │  [User runs: openclaw nodes approve <id>]   │
-       │                                             │
-       │  event: device.paired                       │
-       │  { deviceToken: "..." }                     │
-       │ ◀───────────────────────────────────────────│
-       │                                             │
-       │  [App saves deviceToken securely]           │
-       │  [ConnectionState → Ready]                  │
-       │                                             │
-```
-
-### Reconnect - With Token
-
-```
-┌──────────────┐                              ┌──────────────┐
-│  ClawVoice   │                              │   OpenClaw   │
-└──────┬───────┘                              └──────┬───────┘
-       │                                             │
-       │  WebSocket Connect                          │
-       │ ───────────────────────────────────────────▶│
-       │                                             │
-       │  event: connect.challenge { nonce, ts }     │
-       │ ◀───────────────────────────────────────────│
-       │                                             │
-       │  req: connect                               │
-       │  { device: { signature of nonce },          │
-       │    auth: { token: "<saved-token>" } }       │
-       │ ───────────────────────────────────────────▶│
-       │                                             │
-       │  res: { ok: true, payload: { ... } }        │
-       │ ◀───────────────────────────────────────────│
-       │                                             │
-       │  [ConnectionState → Ready]                  │
-       │  [Fetch history: chat.history]              │
-       │                                             │
-```
-
-### Chat Flow
-
-```
-┌──────────────┐                              ┌──────────────┐
-│  ClawVoice   │                              │   OpenClaw   │
-└──────┬───────┘                              └──────┬───────┘
-       │                                             │
-       │  [User speaks: "What's the weather?"]       │
-       │  [STT → text locally]                       │
-       │                                             │
-       │  req: chat.send                             │
-       │  { sessionKey: "main",                      │
-       │    message: "What's the weather?" }         │
-       │ ───────────────────────────────────────────▶│
-       │                                             │
-       │  res: { ok: true }                          │
-       │ ◀───────────────────────────────────────────│
-       │                                             │
-       │  event: chat { state: "delta", text: "It" } │
-       │ ◀───────────────────────────────────────────│
-       │  event: chat { state: "delta", text: "It's"}│
-       │ ◀───────────────────────────────────────────│
-       │  ...                                        │
-       │  event: chat { state: "final",              │
-       │                text: "It's 72°F and sunny" }│
-       │ ◀───────────────────────────────────────────│
-       │                                             │
-       │  [Filter → TTS speaks response]             │
-       │                                             │
-```
-
-## Key Classes
-
-### ClawdClient
-
-Main WebSocket client. Handles:
-- Connection lifecycle
-- Challenge/response authentication
-- Request/response correlation
-- Event dispatching
-- Auto-reconnect with exponential backoff
+### Required Values
 
 ```kotlin
-class ClawdClient(context: Context, gatewayUrl: String) {
-    // State
-    val connectionState: StateFlow<ConnectionState>
-    val messages: StateFlow<List<ChatMessage>>
-    val events: SharedFlow<GatewayEvent>
-    
-    // Actions
-    fun connect(initialToken: String? = null)
-    fun disconnect()
-    suspend fun sendMessage(text: String, sessionKey: String = "main"): Boolean
-    suspend fun fetchHistory(sessionKey: String = "main", limit: Int = 50)
+// Client identification
+put("id", "openclaw-android")  // MUST use this exact ID
+put("version", BuildConfig.VERSION_NAME)
+put("platform", "android")
+put("mode", "webchat")  // For session sharing with web UI
+
+// Role and scopes
+put("role", "operator")
+putJsonArray("scopes") {
+    add("operator.read")
+    add("operator.write")
 }
 ```
 
-### DeviceIdentity
+### Valid Client IDs
 
-Cryptographic device identity for pairing:
+| ID | Use |
+|----|-----|
+| `openclaw-android` | ✅ Use this for ClawVoice |
+| `openclaw-ios` | iOS apps |
+| `openclaw-macos` | macOS apps |
+| `webchat-ui` | Browser webchat |
+| `cli` | Command line tools |
+
+### Valid Modes
+
+| Mode | Origin Check | Session Sharing |
+|------|--------------|-----------------|
+| `webchat` | Yes | Yes |
+| `ui` | No | Limited |
+| `cli` | No | No |
+
+---
+
+## Origin Header (Critical!)
+
+**Problem:** Gateway checks Origin header for `webchat` mode. Native apps may not send one, causing "origin not allowed" error.
+
+**Solution:** Explicitly set Origin header:
 
 ```kotlin
-class DeviceIdentity {
-    val deviceId: String        // SHA-256 of public key
-    val publicKeyBase64: String // Ed25519 public key
-    
-    fun signChallenge(nonce: String, signedAtMs: Long, token: String): SignedChallenge
+val wsUrl = gatewayUrl
+    .replace("https://", "wss://")
+    .replace("http://", "ws://")
+
+val request = Request.Builder()
+    .url(wsUrl)
+    .header("Origin", gatewayUrl)  // REQUIRED for webchat mode
+    .build()
+
+webSocket = okHttpClient.newWebSocket(request, listener)
+```
+
+---
+
+## Pairing Flow
+
+### Short Request ID (Recommended)
+
+Generate a short ID client-side for easier user typing:
+
+```kotlin
+fun generateShortRequestId(): String {
+    return UUID.randomUUID().toString().take(8)
 }
 ```
 
-### MessageFilter
-
-Strips protocol markers before display/TTS:
+Include in connect params:
 
 ```kotlin
-object MessageFilter {
-    fun processAssistantMessage(rawContent: String): ProcessedMessage
-    
-    data class ProcessedMessage(
-        val text: String,           // Cleaned text for display/TTS
-        val mediaPath: String?,     // Extracted MEDIA: path (if any)
-        val shouldDisplay: Boolean  // False for HEARTBEAT_OK, NO_REPLY
-    )
+putJsonObject("device") {
+    put("id", deviceIdentity.deviceId)
+    put("publicKey", deviceIdentity.publicKeyBase64)
+    put("requestId", generateShortRequestId())  // e.g., "a1b2c3d4"
+    put("signature", signed.signature)
+    put("signedAt", signed.signedAt)
+    put("nonce", signed.nonce)
 }
 ```
 
-**Filtered patterns:**
-- `HEARTBEAT_OK` — Heartbeat acknowledgment (entire message)
-- `NO_REPLY` — Silent response marker (entire message)
-- `MEDIA:...` — Server TTS audio path (extracted, line removed)
-- `[[reply_to_current]]` — Reply tag (stripped)
-- `[[reply_to:...]]` — Reply tag with ID (stripped)
+User approves with: `openclaw nodes approve a1b2c3d4`
 
-### ConnectionState
-
-```kotlin
-sealed class ConnectionState {
-    object Disconnected : ConnectionState()
-    object Connecting : ConnectionState()
-    object Connected : ConnectionState()      // WebSocket open, not yet authenticated
-    object WaitingForPairing : ConnectionState()
-    object Ready : ConnectionState()          // Authenticated, can chat
-    data class Error(val message: String) : ConnectionState()
-}
-```
-
-## Protocol Details
-
-### Connect Request
+### Full Connect Request
 
 ```kotlin
 val connectParams = buildJsonObject {
     put("minProtocol", 3)
     put("maxProtocol", 3)
+    
     putJsonObject("client") {
-        put("id", "clawdbot-android")
+        put("id", "openclaw-android")
         put("version", BuildConfig.VERSION_NAME)
         put("platform", "android")
-        put("mode", "webchat")  // Uses webchat session routing
+        put("mode", "webchat")
     }
+    
     put("role", "operator")
     putJsonArray("scopes") {
         add("operator.read")
         add("operator.write")
     }
+    putJsonArray("caps") {}
+    putJsonArray("commands") {}
+    putJsonObject("permissions") {}
+    
     putJsonObject("auth") {
         put("token", deviceToken ?: "")
     }
+    
+    put("locale", Locale.getDefault().toLanguageTag())
+    put("userAgent", "clawvoice/${BuildConfig.VERSION_NAME}")
+    
     putJsonObject("device") {
         put("id", deviceIdentity.deviceId)
         put("publicKey", deviceIdentity.publicKeyBase64)
+        put("requestId", shortRequestId)  // Client-generated, 6-8 chars
         put("signature", signed.signature)
         put("signedAt", signed.signedAt)
         put("nonce", signed.nonce)
@@ -247,79 +144,202 @@ val connectParams = buildJsonObject {
 }
 ```
 
-### Chat Event Handling
+### Pairing States
+
+```kotlin
+sealed class ConnectionState {
+    object Disconnected : ConnectionState()
+    object Connecting : ConnectionState()
+    object Connected : ConnectionState()      // WS open, not authenticated
+    object WaitingForPairing : ConnectionState()  // Show requestId to user
+    object Ready : ConnectionState()          // Authenticated, can chat
+    data class Error(val message: String) : ConnectionState()
+}
+```
+
+### Handle Pairing Response
+
+```kotlin
+private fun handleChallenge(payload: JsonObject) {
+    // ... sign challenge ...
+    
+    scope.launch {
+        val response = sendRequest("connect", connectParams)
+        val ok = response["ok"]?.jsonPrimitive?.boolean ?: false
+
+        if (ok) {
+            // Connected! Save token if provided
+            val authPayload = response["payload"]?.jsonObject?.get("auth")?.jsonObject
+            val newToken = authPayload?.get("deviceToken")?.jsonPrimitive?.contentOrNull
+            if (newToken != null) {
+                deviceToken = newToken
+                SecureStorage.saveDeviceToken(context, newToken)
+            }
+            _connectionState.value = ConnectionState.Ready
+        } else {
+            val errorCode = response["error"]?.jsonObject?.get("code")?.jsonPrimitive?.content
+            if (errorCode == "pairing_required") {
+                // Show the requestId to user
+                _connectionState.value = ConnectionState.WaitingForPairing
+                _events.emit(GatewayEvent.PairingRequired(shortRequestId))
+            }
+        }
+    }
+}
+
+// Listen for approval
+private fun handlePaired(payload: JsonObject) {
+    val newToken = payload["deviceToken"]?.jsonPrimitive?.contentOrNull
+    if (newToken != null) {
+        deviceToken = newToken
+        SecureStorage.saveDeviceToken(context, newToken)
+        _connectionState.value = ConnectionState.Ready
+    }
+}
+```
+
+---
+
+## Message Filtering
+
+```kotlin
+object MessageFilter {
+    
+    fun processAssistantMessage(rawContent: String): ProcessedMessage {
+        val trimmed = rawContent.trim()
+
+        // Silent markers - don't display at all
+        if (trimmed == "HEARTBEAT_OK" || trimmed == "NO_REPLY") {
+            return ProcessedMessage(text = "", shouldDisplay = false)
+        }
+
+        val lines = rawContent.lines()
+        val displayLines = mutableListOf<String>()
+        var mediaPath: String? = null
+
+        for (line in lines) {
+            val lineTrimmed = line.trim()
+            when {
+                lineTrimmed.startsWith("MEDIA:") -> {
+                    mediaPath = lineTrimmed.removePrefix("MEDIA:").trim()
+                }
+                lineTrimmed == "HEARTBEAT_OK" || lineTrimmed == "NO_REPLY" -> {
+                    // skip
+                }
+                else -> displayLines.add(line)
+            }
+        }
+
+        // Strip reply tags
+        var finalText = displayLines.joinToString("\n")
+        finalText = finalText
+            .replace(Regex("""\[\[\s*reply_to_current\s*]]"""), "")
+            .replace(Regex("""\[\[\s*reply_to:\s*[^\]]+\s*]]"""), "")
+            .trim()
+
+        return ProcessedMessage(
+            text = finalText,
+            mediaPath = mediaPath,
+            shouldDisplay = finalText.isNotEmpty() || mediaPath != null
+        )
+    }
+}
+```
+
+---
+
+## Chat Methods
+
+### Send Message
+
+```kotlin
+suspend fun sendMessage(text: String, sessionKey: String = "main"): Boolean {
+    val params = buildJsonObject {
+        put("sessionKey", sessionKey)
+        put("message", text)
+        put("idempotencyKey", UUID.randomUUID().toString())
+    }
+    
+    return try {
+        val response = sendRequest("chat.send", params)
+        response["ok"]?.jsonPrimitive?.boolean ?: false
+    } catch (e: Exception) {
+        false
+    }
+}
+```
+
+### Receive Streaming Response
 
 ```kotlin
 private fun handleChatEvent(payload: JsonObject) {
     val state = payload["state"]?.jsonPrimitive?.content  // "delta" or "final"
-    val runId = payload["runId"]?.jsonPrimitive?.content
     
-    // Extract text from message.content array
     val textContent = payload["message"]?.jsonObject
         ?.get("content")?.jsonArray
-        ?.filter { it["type"] == "text" }
+        ?.filter { it.jsonObject["type"]?.jsonPrimitive?.content == "text" }
         ?.firstOrNull()
-        ?.get("text")?.jsonPrimitive?.content
-    
+        ?.jsonObject?.get("text")?.jsonPrimitive?.content
+
     when (state) {
         "delta" -> {
-            // Update streaming message (text is cumulative)
-            currentStreamingContent = StringBuilder(textContent)
-            updateMessageList()
+            // Update UI with streaming text (cumulative)
+            updateStreamingMessage(textContent)
         }
         "final" -> {
-            // Response complete - trigger TTS
-            val processed = MessageFilter.processAssistantMessage(textContent)
+            // Complete - filter and speak
+            val processed = MessageFilter.processAssistantMessage(textContent ?: "")
             if (processed.shouldDisplay) {
-                emitTextComplete(processed.text)
+                speakText(processed.text)
             }
         }
     }
 }
 ```
 
-## Configuration
+### Fetch History
+
+```kotlin
+suspend fun fetchHistory(sessionKey: String = "main", limit: Int = 50) {
+    val params = buildJsonObject {
+        put("sessionKey", sessionKey)
+        put("limit", limit)
+    }
+    
+    val response = sendRequest("chat.history", params)
+    // Parse and filter messages...
+}
+```
+
+---
+
+## Configuration Constants
 
 ```kotlin
 object ClawdConfig {
     const val PROTOCOL_VERSION = 3
     const val CONNECT_TIMEOUT_MS = 30_000L
-    const val REQUEST_TIMEOUT_MS = 60_000L
-    const val PING_INTERVAL_MS = 30_000L
+    const val REQUEST_TIMEOUT_MS = 30_000L
+    const val PING_INTERVAL_MS = 10_000L
     const val RECONNECT_BASE_DELAY_MS = 1_000L
-    const val RECONNECT_MAX_DELAY_MS = 30_000L
+    const val RECONNECT_MAX_DELAY_MS = 60_000L
 }
 ```
 
-## Error Handling
+---
 
-| Scenario | Behavior |
-|----------|----------|
-| WebSocket failure | Auto-reconnect with backoff (max 10 attempts) |
-| `pairing_required` | Show pairing UI, wait for `device.paired` event |
-| Invalid token | Clear token, reconnect (triggers new pairing) |
-| Request timeout | Fail the request, connection stays open |
-| Ping failure | Log warning, connection may be stale |
+## Troubleshooting
 
-## Security
-
-1. **Device token** — Stored in EncryptedSharedPreferences (Android Keystore)
-2. **Challenge signing** — Ed25519 signature proves device identity
-3. **TLS required** — Always use `wss://` in production
-4. **No secrets in logs** — Tokens and message content not logged
-
-## Bandwidth
-
-Only text crosses the network:
-- User speech → STT (local) → text → WebSocket
-- WebSocket → text → TTS (local) → audio
-
-Typical message: ~100-500 bytes
-Typical response: ~200-2000 bytes
+| Error | Cause | Fix |
+|-------|-------|-----|
+| "origin not allowed" | Missing/wrong Origin header | Add `.header("Origin", gatewayUrl)` |
+| "pairing_required" | New device | User runs `openclaw nodes approve <id>` |
+| "protocol mismatch" | Wrong version | Use `minProtocol: 3, maxProtocol: 3` |
+| No responses | Wrong mode/session | Check `mode: "webchat"` |
 
 ---
 
 ## Related
 
 - [OpenClaw Integration](channel.md) — Gateway setup
-- [Gateway Protocol](/docs/gateway/protocol.md) — Full protocol spec
+- [Gateway Protocol](https://docs.openclaw.ai/gateway/protocol) — Full spec
