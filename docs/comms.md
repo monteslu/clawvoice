@@ -74,34 +74,29 @@ val request = Request.Builder()
 webSocket = okHttpClient.newWebSocket(request, listener)
 ```
 
+User must configure their gateway to allow this origin:
+
+```json
+{
+  "gateway": {
+    "controlUi": {
+      "allowedOrigins": ["https://their-gateway.shiv.to"]
+    }
+  }
+}
+```
+
 ---
 
 ## Pairing Flow
 
-### Short Request ID (Recommended)
+### Request ID
 
-Generate a short ID client-side for easier user typing:
+The gateway generates a UUID `requestId` for each pairing request. The app displays this to the user so they can approve with:
 
-```kotlin
-fun generateShortRequestId(): String {
-    return UUID.randomUUID().toString().take(8)
-}
+```bash
+openclaw nodes approve <requestId>
 ```
-
-Include in connect params:
-
-```kotlin
-putJsonObject("device") {
-    put("id", deviceIdentity.deviceId)
-    put("publicKey", deviceIdentity.publicKeyBase64)
-    put("requestId", generateShortRequestId())  // e.g., "a1b2c3d4"
-    put("signature", signed.signature)
-    put("signedAt", signed.signedAt)
-    put("nonce", signed.nonce)
-}
-```
-
-User approves with: `openclaw nodes approve a1b2c3d4`
 
 ### Full Connect Request
 
@@ -136,24 +131,10 @@ val connectParams = buildJsonObject {
     putJsonObject("device") {
         put("id", deviceIdentity.deviceId)
         put("publicKey", deviceIdentity.publicKeyBase64)
-        put("requestId", shortRequestId)  // Client-generated, 6-8 chars
         put("signature", signed.signature)
         put("signedAt", signed.signedAt)
         put("nonce", signed.nonce)
     }
-}
-```
-
-### Pairing States
-
-```kotlin
-sealed class ConnectionState {
-    object Disconnected : ConnectionState()
-    object Connecting : ConnectionState()
-    object Connected : ConnectionState()      // WS open, not authenticated
-    object WaitingForPairing : ConnectionState()  // Show requestId to user
-    object Ready : ConnectionState()          // Authenticated, can chat
-    data class Error(val message: String) : ConnectionState()
 }
 ```
 
@@ -169,19 +150,23 @@ private fun handleChallenge(payload: JsonObject) {
 
         if (ok) {
             // Connected! Save token if provided
-            val authPayload = response["payload"]?.jsonObject?.get("auth")?.jsonObject
-            val newToken = authPayload?.get("deviceToken")?.jsonPrimitive?.contentOrNull
+            val newToken = response["payload"]?.jsonObject
+                ?.get("auth")?.jsonObject
+                ?.get("deviceToken")?.jsonPrimitive?.contentOrNull
             if (newToken != null) {
                 deviceToken = newToken
                 SecureStorage.saveDeviceToken(context, newToken)
             }
             _connectionState.value = ConnectionState.Ready
         } else {
-            val errorCode = response["error"]?.jsonObject?.get("code")?.jsonPrimitive?.content
+            val error = response["error"]?.jsonObject
+            val errorCode = error?.get("code")?.jsonPrimitive?.content
             if (errorCode == "pairing_required") {
-                // Show the requestId to user
+                // Get requestId from error details
+                val requestId = error["details"]?.jsonObject
+                    ?.get("requestId")?.jsonPrimitive?.content
                 _connectionState.value = ConnectionState.WaitingForPairing
-                _events.emit(GatewayEvent.PairingRequired(shortRequestId))
+                _events.emit(GatewayEvent.PairingRequired(requestId))
             }
         }
     }
@@ -195,6 +180,19 @@ private fun handlePaired(payload: JsonObject) {
         SecureStorage.saveDeviceToken(context, newToken)
         _connectionState.value = ConnectionState.Ready
     }
+}
+```
+
+### Connection States
+
+```kotlin
+sealed class ConnectionState {
+    object Disconnected : ConnectionState()
+    object Connecting : ConnectionState()
+    object Connected : ConnectionState()      // WS open, not authenticated
+    object WaitingForPairing : ConnectionState()  // Show requestId to user
+    object Ready : ConnectionState()          // Authenticated, can chat
+    data class Error(val message: String) : ConnectionState()
 }
 ```
 
@@ -297,20 +295,6 @@ private fun handleChatEvent(payload: JsonObject) {
 }
 ```
 
-### Fetch History
-
-```kotlin
-suspend fun fetchHistory(sessionKey: String = "main", limit: Int = 50) {
-    val params = buildJsonObject {
-        put("sessionKey", sessionKey)
-        put("limit", limit)
-    }
-    
-    val response = sendRequest("chat.history", params)
-    // Parse and filter messages...
-}
-```
-
 ---
 
 ## Configuration Constants
@@ -332,8 +316,8 @@ object ClawdConfig {
 
 | Error | Cause | Fix |
 |-------|-------|-----|
-| "origin not allowed" | Missing/wrong Origin header | Add `.header("Origin", gatewayUrl)` |
-| "pairing_required" | New device | User runs `openclaw nodes approve <id>` |
+| "origin not allowed" | Missing/wrong Origin header | Add `.header("Origin", gatewayUrl)` and configure `allowedOrigins` |
+| "pairing_required" | New device | User runs `openclaw nodes approve <requestId>` |
 | "protocol mismatch" | Wrong version | Use `minProtocol: 3, maxProtocol: 3` |
 | No responses | Wrong mode/session | Check `mode: "webchat"` |
 
