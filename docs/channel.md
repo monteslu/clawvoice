@@ -24,46 +24,25 @@ ClawVoice connects directly to the **existing OpenClaw Gateway WebSocket** — n
 │  │   • chat.send / chat.history                            │ │
 │  │   • chat events (delta/final streaming)                 │ │
 │  │   • ping keepalive                                      │ │
-│  │                                                         │ │
-│  │   Already handles:                                      │ │
-│  │   • Device pairing + token issuance                     │ │
-│  │   • Session management                                  │ │
-│  │   • Agent invocation                                    │ │
-│  │   • Message history                                     │ │
 │  └────────────────────────────────────────────────────────┘ │
-│                              │                               │
-└──────────────────────────────┼───────────────────────────────┘
+└──────────────────────────────────────────────────────────────┘
                                │
                     WebSocket (wss://)
                                │
-                               ▼
                     ┌─────────────────────┐
                     │   Android Device    │
-                    │  ┌───────────────┐  │
-                    │  │  ClawVoice    │  │
-                    │  │  • STT local  │  │
-                    │  │  • TTS local  │  │
-                    │  │  • Text → WS  │  │
-                    │  └───────────────┘  │
+                    │  • STT local        │
+                    │  • TTS local        │
+                    │  • Text → WS        │
                     └─────────────────────┘
 ```
-
-## Why WebSocket?
-
-| Feature | WebSocket (current) | REST (alternative) |
-|---------|--------------------|--------------------|
-| Streaming responses | ✅ Real-time deltas | ❌ Wait for complete |
-| Connection state | ✅ Know immediately | ❌ Poll for status |
-| Keepalive | ✅ Built-in ping | ❌ Manual heartbeat |
-| Auth | ✅ Existing protocol | ❌ Custom implementation |
-| Code reuse | ✅ Same as iOS/macOS | ❌ New endpoint |
 
 ## Setup
 
 ### 1. Start the Gateway
 
 ```bash
-openclaw gateway --port 18789 --verbose
+openclaw gateway --port 18789
 ```
 
 For remote access via hsync:
@@ -74,126 +53,167 @@ hsync --local 18789 --name my-gateway
 
 ### 2. Connect from Android
 
-In ClawVoice:
-1. Enter gateway URL (e.g., `https://my-gateway.shiv.to`)
-2. App converts to WebSocket and connects
-3. First connect triggers pairing request
+Enter gateway URL (e.g., `https://my-gateway.shiv.to`). First connect triggers pairing.
 
 ### 3. Approve Pairing
 
-On the gateway machine:
 ```bash
-openclaw nodes pending
 openclaw nodes approve <requestId>
 ```
 
-Or via the web UI at `http://localhost:18790`.
+The `requestId` is a short code (6-8 chars) shown in the app.
 
-### 4. Done
+---
 
-ClawVoice now:
-- Sends user text via `chat.send`
-- Receives streamed responses via `chat` events
-- Filters protocol markers (HEARTBEAT_OK, NO_REPLY, etc.)
-- Speaks filtered responses via local TTS
+## Client Identity
 
-## Protocol Reference
+### Valid Client IDs
 
-ClawVoice uses [Gateway Protocol v3](/docs/gateway/protocol.md):
+Use one of the pre-defined IDs recognized by the gateway:
 
-### Authentication Flow
+| ID | Description |
+|----|-------------|
+| `openclaw-android` | Android app (ClawVoice) |
+| `openclaw-ios` | iOS app |
+| `openclaw-macos` | macOS app |
+| `webchat-ui` | Browser webchat |
+| `openclaw-control-ui` | Control UI |
+| `cli` | Command line |
 
+**ClawVoice should use:** `openclaw-android`
+
+### Valid Modes
+
+| Mode | Description | Origin Check |
+|------|-------------|--------------|
+| `webchat` | Shares sessions with web UI | Yes (browsers) |
+| `ui` | Native UI client | No |
+| `cli` | Command line | No |
+| `node` | Device with capabilities | No |
+| `backend` | Backend service | No |
+
+**ClawVoice should use:** `webchat` for session sharing, but see Origin section below.
+
+---
+
+## Origin Checking (Important!)
+
+The gateway enforces **origin checking** for `webchat` mode to prevent browser CSRF attacks.
+
+### The Problem
+
+- Browsers can't spoof Origin headers (security)
+- Native apps CAN set any Origin header
+- If native app sends no Origin, gateway rejects with "origin not allowed"
+
+### Solutions
+
+**Option A: Send Origin header (recommended for now)**
+
+```kotlin
+val request = Request.Builder()
+    .url(wsUrl)
+    .header("Origin", gatewayUrl)  // e.g., "https://my-gateway.shiv.to"
+    .build()
 ```
-Gateway → App:  { type: "event", event: "connect.challenge", payload: { nonce, ts } }
-App → Gateway:  { type: "req", method: "connect", params: { auth, device, ... } }
-Gateway → App:  { type: "res", ok: true, payload: { auth: { deviceToken } } }
+
+User must add their gateway URL to `gateway.controlUi.allowedOrigins` in config.
+
+**Option B: Use `ui` mode instead of `webchat`**
+
+```kotlin
+put("mode", "ui")  // No origin check
 ```
 
-### Send Message
+Trade-off: May not share sessions with web UI.
 
-```json
-{
-  "type": "req",
-  "id": "uuid",
-  "method": "chat.send",
-  "params": {
-    "sessionKey": "main",
-    "message": "What time is it?",
-    "idempotencyKey": "uuid"
-  }
+**Option C: Gateway fix (pending)**
+
+Native app client IDs (`openclaw-android`, `openclaw-ios`, `openclaw-macos`) should skip origin checking since they're not vulnerable to CSRF.
+
+---
+
+## Pairing Flow
+
+### Request ID
+
+The `requestId` for pairing can be:
+- **Gateway-generated**: Full UUID (36 chars) — hard to type
+- **Client-generated**: Short ID (6-8 chars) — recommended
+
+Client can send a short ID in the connect params:
+
+```kotlin
+putJsonObject("device") {
+    put("id", deviceIdentity.deviceId)
+    put("publicKey", deviceIdentity.publicKeyBase64)
+    put("requestId", generateShortId())  // e.g., "a1b2c3"
+    // ... signature fields
 }
 ```
 
-### Receive Response (streaming)
+If `device.requestId` is provided, gateway uses it. Otherwise generates a UUID.
 
-```json
-{
-  "type": "event",
-  "event": "chat",
-  "payload": {
-    "sessionKey": "main",
-    "state": "delta",
-    "message": { "content": [{ "type": "text", "text": "It's 3:45" }] }
-  }
-}
+### Flow Diagram
+
+```
+App                                    Gateway
+ │                                        │
+ │──── WebSocket connect ────────────────▶│
+ │                                        │
+ │◀─── connect.challenge {nonce, ts} ─────│
+ │                                        │
+ │──── connect {device, auth} ───────────▶│
+ │     device.requestId = "a1b2c3"        │
+ │                                        │
+ │◀─── error: pairing_required ───────────│
+ │     (shows requestId "a1b2c3")         │
+ │                                        │
+ │         [User runs: openclaw nodes approve a1b2c3]
+ │                                        │
+ │◀─── event: device.paired ──────────────│
+ │     {deviceToken: "..."}               │
+ │                                        │
+ │     [Save token, reconnect]            │
 ```
 
-```json
-{
-  "type": "event",
-  "event": "chat",
-  "payload": {
-    "sessionKey": "main",
-    "state": "final",
-    "message": { "content": [{ "type": "text", "text": "It's 3:45 PM." }] }
-  }
-}
-```
+---
 
 ## Message Filtering
 
-ClawVoice filters these from display/TTS:
+Filter these from display/TTS:
 
 | Pattern | Purpose |
 |---------|---------|
-| `HEARTBEAT_OK` | Internal heartbeat ack |
-| `NO_REPLY` | Silent response marker |
-| `MEDIA:...` | Audio file path (for server TTS) |
+| `HEARTBEAT_OK` | Heartbeat ack |
+| `NO_REPLY` | Silent response |
+| `MEDIA:...` | Audio file path |
 | `[[reply_to_current]]` | Reply tag |
 | `[[reply_to:...]]` | Reply tag with ID |
 
-## Voice Response Tuning
+---
 
-Add to your agent's `SOUL.md`:
+## Configuration Reference
 
-```markdown
-## Voice Responses
+### Gateway Config (openclaw.json)
 
-When responding to voice clients:
-- Keep responses concise (1-3 sentences)
-- Avoid markdown, code blocks, tables
-- Use natural conversational language
-- Spell out abbreviations (NASA → "NASA" not "N.A.S.A.")
+```json
+{
+  "gateway": {
+    "controlUi": {
+      "allowedOrigins": [
+        "https://your-gateway.shiv.to"
+      ]
+    }
+  }
+}
 ```
 
-## Troubleshooting
-
-### "Pairing required" but already approved
-- Device token may have been revoked
-- Clear app data and re-pair
-
-### No responses
-- Check gateway logs: `openclaw gateway --verbose`
-- Verify WebSocket is reachable: `wscat -c wss://your-gateway/`
-
-### Responses cut off
-- Check `state: "final"` event is received
-- May be network timeout
+Required if ClawVoice sends Origin header and uses `webchat` mode.
 
 ---
 
 ## Related
 
 - [Android Implementation](comms.md) — Kotlin code details
-- [Gateway Protocol](/docs/gateway/protocol.md) — Full protocol spec
-- [Device Pairing](/docs/gateway/pairing.md) — Pairing workflow
+- [Gateway Protocol](https://docs.openclaw.ai/gateway/protocol) — Full protocol spec
