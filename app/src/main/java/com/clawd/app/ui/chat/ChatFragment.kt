@@ -15,12 +15,15 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.clawd.app.R
+import com.clawd.app.data.Agent
+import com.clawd.app.data.SecureStorage
 import com.clawd.app.databinding.FragmentChatBinding
 import com.clawd.app.network.ClawdClient
 import com.clawd.app.network.protocol.ConnectionState
 import com.clawd.app.network.protocol.GatewayEvent
 import com.clawd.app.speech.PiperTtsManager
 import com.clawd.app.speech.SpeechRecognizerManager
+import com.clawd.app.ui.agents.AgentListDialog
 import com.clawd.app.ui.settings.VoiceSelectionDialog
 import com.clawd.app.util.MarkdownUtils
 import kotlinx.coroutines.flow.launchIn
@@ -36,13 +39,15 @@ class ChatFragment : Fragment() {
     private lateinit var messageAdapter: MessageAdapter
     private lateinit var speechRecognizer: SpeechRecognizerManager
     private lateinit var tts: PiperTtsManager
-    private var usePiperTts = true // Can fall back to Android TTS if Piper fails
 
     private var autoSpeak = true
     private var handsFreeActive = false
     private var lastSpokenContent = ""
     private var pulseAnimation: Animation? = null
     private var pendingListen = false
+
+    private var onSwitchAgent: ((Agent) -> Unit)? = null
+    private var onAddAgent: (() -> Unit)? = null
 
     private enum class VoiceState { IDLE, LISTENING, SPEAKING }
 
@@ -58,6 +63,14 @@ class ChatFragment : Fragment() {
 
     fun setClient(client: ClawdClient) {
         clawdClient = client
+    }
+
+    fun setOnSwitchAgentListener(listener: (Agent) -> Unit) {
+        onSwitchAgent = listener
+    }
+
+    fun setOnAddAgentListener(listener: () -> Unit) {
+        onAddAgent = listener
     }
 
     override fun onCreateView(
@@ -76,6 +89,12 @@ class ChatFragment : Fragment() {
         setupSpeech()
         setupClickListeners()
         observeClient()
+        updateAgentName()
+    }
+
+    private fun updateAgentName() {
+        val agent = SecureStorage.getActiveAgent(requireContext())
+        binding.agentName.text = agent?.name ?: "No Agent"
     }
 
     private fun setupRecyclerView() {
@@ -93,9 +112,10 @@ class ChatFragment : Fragment() {
         speechRecognizer.initialize()
 
         tts = PiperTtsManager(requireContext())
-        // Load saved voice preference
-        val savedVoiceId = getSavedVoiceId()
-        tts.initialize(savedVoiceId) {
+        // Load voice from active agent, fall back to shared pref
+        val agent = SecureStorage.getActiveAgent(requireContext())
+        val voiceId = agent?.voiceId ?: getSavedVoiceId()
+        tts.initialize(voiceId) {
             android.util.Log.d("ChatFragment", "TTS initialized with voice: ${tts.getCurrentVoiceId()}")
         }
 
@@ -117,7 +137,6 @@ class ChatFragment : Fragment() {
         speechRecognizer.error.onEach { error ->
             if (error != null && handsFreeActive) {
                 android.util.Log.d("ChatFragment", "Speech error in hands-free: $error, will retry")
-                // Brief delay then retry
                 kotlinx.coroutines.delay(500)
                 if (handsFreeActive && !tts.isSpeaking.value) {
                     activity?.runOnUiThread { startVoiceInput() }
@@ -129,7 +148,6 @@ class ChatFragment : Fragment() {
         var wasSpeaking = false
         tts.isSpeaking.onEach { isSpeaking ->
             if (isSpeaking && handsFreeActive) {
-                // Stop any pending listen and stop mic if it somehow started
                 pendingListen = false
                 if (speechRecognizer.isListening.value) {
                     speechRecognizer.stopListening()
@@ -139,10 +157,9 @@ class ChatFragment : Fragment() {
                 }
             } else if (wasSpeaking && !isSpeaking) {
                 if (handsFreeActive && autoSpeak) {
-                    // TTS just finished - small delay for audio system latency
                     android.util.Log.d("ChatFragment", "TTS finished, starting listen")
                     pendingListen = true
-                    kotlinx.coroutines.delay(200) // Small buffer for audio system
+                    kotlinx.coroutines.delay(200)
                     if (pendingListen && handsFreeActive && !tts.isSpeaking.value) {
                         pendingListen = false
                         android.util.Log.d("ChatFragment", "Starting listen after TTS")
@@ -155,17 +172,14 @@ class ChatFragment : Fragment() {
             wasSpeaking = isSpeaking
         }.launchIn(lifecycleScope)
 
-        // Tap overlay to interrupt and listen
+        // Tap overlay to interrupt
         binding.voiceOverlay.setOnClickListener {
             if (tts.isSpeaking.value) {
-                // Stop speaking - the flow will trigger listening after delay
                 tts.stop()
                 if (!handsFreeActive) {
                     hideVoiceOverlay()
                 }
-                // If hands-free, the isSpeaking flow will handle starting listen
             } else if (speechRecognizer.isListening.value) {
-                // Stop listening
                 stopHandsFree()
             }
         }
@@ -193,11 +207,10 @@ class ChatFragment : Fragment() {
         binding.voiceStatusText.text = statusText
         binding.pulseIcon.setImageResource(iconRes)
 
-        // Start animations
         pulseAnimation?.let { anim ->
             binding.pulseBubble.startAnimation(anim)
             binding.pulseRing.startAnimation(AnimationUtils.loadAnimation(requireContext(), R.anim.pulse_animation).apply {
-                startOffset = 200 // Offset for ripple effect
+                startOffset = 200
             })
         }
     }
@@ -215,10 +228,8 @@ class ChatFragment : Fragment() {
 
         binding.voiceButton.setOnClickListener {
             if (handsFreeActive || speechRecognizer.isListening.value) {
-                // Stop hands-free mode
                 stopHandsFree()
             } else {
-                // Start hands-free conversation
                 handsFreeActive = true
                 checkMicrophonePermission()
             }
@@ -240,11 +251,32 @@ class ChatFragment : Fragment() {
             showVoiceSelectionDialog()
         }
 
+        // Tap agent name to open agent switcher
+        binding.agentName.setOnClickListener {
+            showAgentList()
+        }
+
         updateModeIcon()
+    }
+
+    private fun showAgentList() {
+        AgentListDialog(
+            onAgentSelected = { agent ->
+                onSwitchAgent?.invoke(agent)
+            },
+            onAddAgent = {
+                onAddAgent?.invoke()
+            }
+        ).show(parentFragmentManager, "agent_list")
     }
 
     private fun showVoiceSelectionDialog() {
         VoiceSelectionDialog(tts) { voiceId ->
+            // Save voice to active agent
+            val agent = SecureStorage.getActiveAgent(requireContext())
+            if (agent != null) {
+                SecureStorage.updateAgent(requireContext(), agent.copy(voiceId = voiceId))
+            }
             saveVoiceId(voiceId)
         }.show(parentFragmentManager, "voice_selection")
     }
@@ -261,9 +293,9 @@ class ChatFragment : Fragment() {
 
     private fun updateModeIcon() {
         val iconRes = if (autoSpeak) {
-            android.R.drawable.ic_lock_silent_mode_off  // Speaker on
+            android.R.drawable.ic_lock_silent_mode_off
         } else {
-            android.R.drawable.ic_lock_silent_mode      // Speaker off/muted
+            android.R.drawable.ic_lock_silent_mode
         }
         binding.modeToggle.setImageResource(iconRes)
     }
@@ -284,14 +316,11 @@ class ChatFragment : Fragment() {
                         }
                     }
 
-                    // Auto-speak new assistant messages
                     val lastMessage = messages.lastOrNull()
                     if (autoSpeak && lastMessage?.role == "assistant") {
                         val content = lastMessage.content
                         if (content != lastSpokenContent && content.isNotBlank()) {
-                            // Only speak when message is complete (no more streaming)
-                            // We detect this by checking if content hasn't changed in a short time
-                            // For simplicity, we'll speak complete messages only
+                            // Speak complete messages only (handled via events)
                         }
                     }
                 }
@@ -299,12 +328,10 @@ class ChatFragment : Fragment() {
 
             client.events.onEach { event ->
                 if (event is GatewayEvent.Chat && (event.type == "textComplete" || event.type == "final")) {
-                    // Text is complete, speak it (textComplete is faster than final)
                     val content = event.content ?: client.messages.value.lastOrNull()?.content ?: ""
                     android.util.Log.d("ChatFragment", "${event.type} event received, autoSpeak=$autoSpeak, content=${content.take(50)}")
                     if (autoSpeak && content.isNotBlank() && content != lastSpokenContent) {
                         lastSpokenContent = content
-                        // Strip markdown formatting for natural TTS reading
                         val speakableText = MarkdownUtils.stripForTts(content)
                         android.util.Log.d("ChatFragment", "Speaking: ${speakableText.take(50)}")
                         activity?.runOnUiThread {
@@ -334,18 +361,12 @@ class ChatFragment : Fragment() {
 
     private fun sendMessage() {
         val text = binding.messageInput.text?.toString()?.trim()
-        android.util.Log.d("ChatFragment", "sendMessage called, text='$text', client=${clawdClient != null}")
-        if (text.isNullOrBlank()) {
-            android.util.Log.d("ChatFragment", "Text is blank, returning")
-            return
-        }
+        if (text.isNullOrBlank()) return
 
         binding.messageInput.text?.clear()
 
         lifecycleScope.launch {
-            android.util.Log.d("ChatFragment", "Launching coroutine to send message")
-            val result = clawdClient?.sendMessage(text)
-            android.util.Log.d("ChatFragment", "sendMessage result: $result")
+            clawdClient?.sendMessage(text)
         }
     }
 
@@ -364,7 +385,6 @@ class ChatFragment : Fragment() {
     }
 
     private fun startVoiceInput() {
-        // Never start mic while TTS is playing
         if (tts.isSpeaking.value) {
             android.util.Log.d("ChatFragment", "Blocked mic start - TTS still speaking")
             return

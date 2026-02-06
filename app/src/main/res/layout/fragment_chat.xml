@@ -25,15 +25,36 @@
             android:src="@android:drawable/ic_menu_manage"
             app:tint="@color/white" />
 
-        <TextView
-            android:id="@+id/connectionStatus"
+        <LinearLayout
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:gravity="center"
-            android:text="@string/connected"
-            android:textColor="@color/white"
-            android:textSize="12sp" />
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/agentName"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="?attr/selectableItemBackground"
+                android:drawableEnd="@android:drawable/arrow_down_float"
+                android:gravity="center"
+                android:paddingHorizontal="8dp"
+                android:text="Agent"
+                android:textColor="@color/white"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/connectionStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:text="@string/connected"
+                android:textColor="#CCFFFFFF"
+                android:textSize="11sp" />
+
+        </LinearLayout>
 
         <ImageButton
             android:id="@+id/modeToggle"

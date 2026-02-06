@@ -93,8 +93,11 @@ class ClawdClient(
             return
         }
 
+        val wasPairing = _connectionState.value is ConnectionState.WaitingForPairing
         deviceToken = initialToken ?: SecureStorage.getDeviceToken(context)
-        _connectionState.value = ConnectionState.Connecting
+        if (!wasPairing) {
+            _connectionState.value = ConnectionState.Connecting
+        }
 
         val wsUrl = gatewayUrl
             .replace("https://", "wss://")
@@ -103,8 +106,15 @@ class ClawdClient(
 
         Log.d(TAG, "Connecting to: $wsUrl")
 
+        // Derive HTTP origin from gateway URL so the server accepts us
+        val origin = gatewayUrl
+            .replace("wss://", "https://")
+            .replace("ws://", "http://")
+            .trimEnd('/')
+
         val request = Request.Builder()
             .url(wsUrl)
+            .header("Origin", origin)
             .build()
 
         webSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
@@ -127,14 +137,21 @@ class ClawdClient(
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.e(TAG, "WebSocket failure", t)
-                _connectionState.value = ConnectionState.Error(t.message ?: "Connection failed")
+                val wasPairing = _connectionState.value is ConnectionState.WaitingForPairing
+                if (!wasPairing) {
+                    _connectionState.value = ConnectionState.Error(t.message ?: "Connection failed")
+                }
                 stopPingJob()
+                // Always reconnect — pairing state is preserved
                 scheduleReconnect()
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 Log.d(TAG, "WebSocket closed: $code $reason")
-                _connectionState.value = ConnectionState.Disconnected
+                val wasPairing = _connectionState.value is ConnectionState.WaitingForPairing
+                if (!wasPairing) {
+                    _connectionState.value = ConnectionState.Disconnected
+                }
                 stopPingJob()
                 if (code != 1000) {
                     scheduleReconnect()
@@ -179,7 +196,7 @@ class ClawdClient(
             put("minProtocol", ClawdConfig.PROTOCOL_VERSION)
             put("maxProtocol", ClawdConfig.PROTOCOL_VERSION)
             putJsonObject("client") {
-                put("id", "clawdbot-android")
+                put("id", "openclaw-android")
                 put("version", BuildConfig.VERSION_NAME)
                 put("platform", "android")
                 put("mode", "webchat")
@@ -224,10 +241,12 @@ class ClawdClient(
                     // Fetch history after connecting
                     fetchHistory()
                 } else {
-                    val errorCode = response["error"]?.jsonObject?.get("code")?.jsonPrimitive?.content
-                    if (errorCode == "pairing_required") {
-                        Log.d(TAG, "Pairing required")
-                        _connectionState.value = ConnectionState.WaitingForPairing
+                    val errorObj = response["error"]?.jsonObject
+                    val errorCode = errorObj?.get("code")?.jsonPrimitive?.content
+                    if (errorCode == "pairing_required" || errorCode == "NOT_PAIRED") {
+                        val requestId = errorObj?.get("details")?.jsonObject?.get("requestId")?.jsonPrimitive?.contentOrNull
+                        Log.d(TAG, "Pairing required, requestId=$requestId")
+                        _connectionState.value = ConnectionState.WaitingForPairing(requestId)
                         _events.emit(GatewayEvent.PairingRequired)
                     } else {
                         val errorMsg = response["error"]?.jsonObject?.get("message")?.jsonPrimitive?.content

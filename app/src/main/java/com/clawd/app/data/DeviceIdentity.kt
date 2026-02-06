@@ -23,7 +23,7 @@ class DeviceIdentity private constructor(
     fun signChallenge(
         nonce: String,
         signedAtMs: Long,
-        clientId: String = "clawdbot-android",
+        clientId: String = "openclaw-android",
         clientMode: String = "webchat",
         role: String = "operator",
         scopes: List<String> = listOf("operator.read", "operator.write"),

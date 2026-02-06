@@ -39,7 +39,7 @@ sealed class ConnectionState {
     object Disconnected : ConnectionState()
     object Connecting : ConnectionState()
     object Connected : ConnectionState()
-    object WaitingForPairing : ConnectionState()
+    data class WaitingForPairing(val requestId: String? = null) : ConnectionState()
     object Ready : ConnectionState()
     data class Error(val message: String) : ConnectionState()
 }

@@ -1,12 +1,11 @@
 package com.clawd.app.data
 
 object ClawdConfig {
-    // Gateway (set during setup)
+    // Gateway (set during setup from active agent)
     var gatewayUrl: String = ""
 
-    // ntfy push notifications (topic set during setup)
+    // ntfy push notifications
     const val NTFY_SERVER = "wss://ntfy.sh"
-    var ntfyTopic: String = ""
 
     // Protocol
     const val PROTOCOL_VERSION = 3

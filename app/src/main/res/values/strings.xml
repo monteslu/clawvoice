@@ -2,6 +2,7 @@
 <resources>
     <string name="app_name">Clawvoice</string>
     <string name="setup_title">Connect to Gateway</string>
+    <string name="add_agent_title">Add Agent</string>
     <string name="gateway_url_hint">Gateway URL (e.g., wss://your-gateway.example.com)</string>
     <string name="gateway_token_hint">Gateway Token (optional for first-time pairing)</string>
     <string name="connect_button">Connect</string>
